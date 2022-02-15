@@ -734,31 +734,31 @@
   var uid = 0;
 
   /**
-   * dep是可以有多个指令订阅的可观察对象。
+   * 调度中心，用来收集观察者Watcher和通知观察者目标更新
    */
   var Dep = function Dep () {
     this.id = uid++;
-    this.subs = [];
+    this.subs = []; // sub => 替代品
   };
 
-  // 添加订阅
+  // 收集观察者
   Dep.prototype.addSub = function addSub (sub) {
     this.subs.push(sub);
   };
 
-  // 移除订阅
+  // 移除观察者
   Dep.prototype.removeSub = function removeSub (sub) {
     remove(this.subs, sub);
   };
 
-  // 添加依赖
+  // 触发观察者原型上的方法，添加依赖
   Dep.prototype.depend = function depend () {
     if (Dep.target) {
       Dep.target.addDep(this);
     }
   };
 
-  // 发布订阅
+  // 通知观察者目标更新
   Dep.prototype.notify = function notify () {
     var subs = this.subs.slice();
     if (!config.async) {
@@ -952,7 +952,7 @@
   }
 
   /**
-   * 附加到每个被观察对象的观察者类。附加后，观察者将目标对象的属性键转换为getter/setter，收集依赖项并发送更新。
+   * Observer类扮演的角色为发布者，主要用来劫持数据，在setter中向Dep添加观察者，在getter中通知观察者更新
    */
   var Observer = function Observer (value) {
     this.value = value;
@@ -1009,6 +1009,7 @@
   }
 
   /**
+   * 订阅者
    * 尝试为一个值创建一个观察者实例，如果观察成功，返回新的观察者，
    * 如果值已经有一个观察者，则返回现有的观察者。
    */
@@ -1044,7 +1045,6 @@
    * @param {Boolean} shallow 是否要添加__ob__ 属性
    */
   function defineReactive$$1 (obj, key, val, customSetter, shallow) {
-    // 创建一个观察者对象
     var dep = new Dep();
 
     // 获取对象上的属性描述符
@@ -1940,6 +1940,7 @@
             for (var i = 0; i < hooks.length; i++) {
               try {
                 var capture = hooks[i].call(cur, err, vm, info) === false;
+                // 返回false，阻止错误向上传播
                 if (capture) { return }
               } catch (e) {
                 globalHandleError(e, cur, 'errorCaptured hook');
@@ -1955,7 +1956,7 @@
   }
 
   /**
-   * 执行handler方法，
+   * 执行handler方法
    */
   function invokeWithErrorHandling (handler, context, args, vm, info) {
     var res;
@@ -2562,7 +2563,7 @@
 
   /**
    * 解析inject
-   * 
+   * @return { foo: "bar" }
    */
   function resolveInject (inject, vm) {
     if (inject) {
@@ -2618,9 +2619,18 @@
 
   /**
    * 用于将原始子VNode解析为slot对象
-   * 解析Slots
+   * 解析slots
+   * @returns { string: VNode } e.g. { default: [VNode], header: [VNode]}
    */
-  function resolveSlots (children,context) {
+  function resolveSlots (children, context) {
+    /*
+      e.g.
+      <child>
+        <div slot="header">
+          slot: header
+        </div>
+      </child>
+    */
     if (!children || !children.length) {
       return {}
     }
@@ -2665,7 +2675,7 @@
    * 格式化作用域插槽 
    * 在执行_render时调用
    */
-  function normalizeScopedSlots (slots, normalSlots, prevSlots /* 父组件的插槽 */) {
+  function normalizeScopedSlots (slots, normalSlots, prevSlots) {
     var res;
     // 是否拥有常规的插槽
     var hasNormalSlots = Object.keys(normalSlots).length > 0;
@@ -2728,8 +2738,8 @@
       ) ? undefined
         : res
     };
-    // 这是一个使用新的v-slot语法的插槽，没有作用域。虽然它被编译为一个作用域插槽，
-    // 但render fn用户希望它出现在这个.$slots上，因为它的用法在语义上是一个普通的插槽。
+    // 具名插槽添加拦截
+    // e.g. vm.$slots.header
     if (fn.proxy) {
       Object.defineProperty(normalSlots, key, {
         get: normalized,
@@ -2879,7 +2889,7 @@
   function checkKeyCodes (eventKeyCode, key, builtInKeyCode, eventKeyName, builtInKeyName) {
     // 键盘码
     var mappedKeyCode = config.keyCodes[key] || builtInKeyCode;
-    // 如果builtInKeyName存在(表名是Vue中自定义的按键），并且按键存在，config.keyCodes用户并没有自定义这个键
+    // 如果builtInKeyName存在(表明是Vue中自定义的按键），并且按键存在，config.keyCodes用户并没有自定义这个键
     if (builtInKeyName && eventKeyName && !config.keyCodes[key]) {
       // 举个栗子：builtInKeyName = Tab    eventKeyName = Tab 则返回false
       return isKeyNotMatch(builtInKeyName, eventKeyName)
@@ -3273,7 +3283,7 @@
       }
     },
 
-    // 前置patch修补
+    // 前置patch
     prepatch: function prepatch (oldVnode, vnode) {
       var options = vnode.componentOptions;
       // 旧节点肯定有componentInstance，因为在初始化时执行了init，创建了实例
@@ -3527,14 +3537,10 @@
   //创建虚拟dom节点
   function _createElement (context, tag, data, children, normalizationType) {
     /**
-     *  如果存在data.__ob__，
-     * 说明data是被Observer观察的数据
-     * 不能用作虚拟节点的data
-     * 需要抛出警告，
-     * 并返回一个空节点
+     *  如果存在data.__ob__，说明data是被Observer观察的数据
+     * 不能用作虚拟节点的data,需要抛出警告，并返回一个空节点
      * 被监控的data不能被用作vnode渲染的数据的原因是：data在vnode渲染过程中可能会被改变，
-     * 这样会触发监控，
-     * 导致不符合预期的操作
+     * 这样会触发监控，导致不符合预期的操作
      */
     if (isDef(data) && isDef((data).__ob__)) {
       warn(
@@ -3659,7 +3665,6 @@
     // 用户编写的渲染功能。
     vm.$createElement = function (a, b, c, d) { return createElement(vm, a, b, c, d, true); };
 
-    // $attrs和$listeners被公开以便于HOC创造。他们必须是被动的，这样使用它们的HOC总是更新的
     var parentData = parentVnode && parentVnode.data;
 
     {
@@ -3714,7 +3719,6 @@
       // render self
       var vnode;
       try {
-          // 不需要维护堆栈，因为所有渲染FN都是彼此独立调用的。在修补父组件时调用嵌套组件的渲染FN。
         currentRenderingInstance = vm;
         // 真正执行渲染(important) 把ast变成vnode，传入createElement函数，用于创建VNode
         vnode = render.call(vm._renderProxy, vm.$createElement);
@@ -4100,6 +4104,7 @@
       parent.$children.push(vm);
     }
 
+    // 设置组件的$parent
     vm.$parent = parent;
     vm.$root = parent ? parent.$root : vm;
 
@@ -4118,7 +4123,7 @@
    * 初始化生命周期混合
    */
   function lifecycleMixin (Vue) {
-    // 更新数据函数
+    // 更新页面
     Vue.prototype._update = function (vnode, hydrating) {
       var vm = this;
       var prevEl = vm.$el; // 获取上一个vue的el节点
@@ -4127,7 +4132,7 @@
       vm._vnode = vnode;
 
       if (!prevVnode) {
-        // 初始渲染 ---------------哈哈哈哈哈哈哈哈
+        // 初始渲染
         vm.$el = vm.__patch__(vm.$el, vnode, hydrating, false /* removeOnly */);
       } else {
         // 更新
@@ -4267,7 +4272,6 @@
     }, true /* isRenderWatcher */);
     hydrating = false;
 
-    // 手动挂载的实例，在自挂载上调用挂载在其插入钩子中的呈现创建的子组件
     if (vm.$vnode == null) {
       vm._isMounted = true;
       // 第四个生命周期mounted
@@ -4312,7 +4316,7 @@
     }
     vm.$options._renderChildren = renderChildren;
 
-    // update$attrs和$listeners散列这些也是被动的，
+    // update$attrs和$listeners是响应式的
     // 因此如果子对象在渲染期间使用它们，它们可能会触发子对象更新
     vm.$attrs = parentVnode.data.attrs || emptyObject;
     vm.$listeners = listeners || emptyObject;
@@ -4325,6 +4329,7 @@
       for (var i = 0; i < propKeys.length; i++) {
         var key = propKeys[i];
         var propOptions = vm.$options.props;
+        // 将propsData传递给props
         props[key] = validateProp(key, propOptions, propsData, vm);
       }
       toggleObserving(true);
@@ -4338,7 +4343,7 @@
     vm.$options._parentListeners = listeners;
     updateComponentListeners(vm, listeners, oldListeners);
 
-    // 解析插槽+如果有子项则强制更新
+    // 解析插槽，如果有子项则强制更新
     if (needsForceUpdate) {
       vm.$slots = resolveSlots(renderChildren, parentVnode.context);
       vm.$forceUpdate();
@@ -4597,7 +4602,8 @@
   var uid$2 = 0;
 
   /**
-   * 观察者Watcher的构造函数
+   * Watcher类扮演的角色为观察者，主要作用是为观察属性提供回调函数以及收集依赖，当被观察的值发生变化时，会接收到来自Dep的通知，从而触发回调函数。
+   * Watcher -- 实现了渲染方法 _render 和 Dep 的关联， 初始化 Watcher 的时候，打上 Dep.target 标识，然后调用 get 方法进行页面渲染。
    * @param {Object} vm Vue实例
    * @param {Fn | String} expOrFn 获取值时触发的回调
    * @param {Fn} cb 设置值时触发的回调
@@ -4815,9 +4821,9 @@
    }
    设置监听观察者, 该函数是可以让对象中的三级key 直接冒泡到1级key中
    比如 name 只能在Odata.data.name 获取到数据，执行 proxy(Odata,'data','name')之后可以Odata.name 获取值
-   */
+  */
   /** 
-   * e.g:
+   * e.g.
    * target = vm
    * sourceKey = "_data"
    * key = 属性名
@@ -5000,7 +5006,7 @@
         );
       }
 
-      // 将计算属性的key添加入监听者中
+      // 将计算属性的key添加入观察者中
       if (!isSSR) {
         watchers[key] = new Watcher(
           vm,
@@ -5010,8 +5016,8 @@
         );
       }
 
-      // 组件定义的计算属性已在组件原型上定义。我们只需要定义在实例化时定义的计算属性。
-      if (!(key in vm)) { // 如果computed 属性key 不在虚拟dom中
+      if (!(key in vm)) { 
+        // 如果computed的属性key 不在vm中
         defineComputed(vm, key, userDef);
       } else {
         if (key in vm.$data) {
@@ -5026,23 +5032,23 @@
   }
 
   /**
-   * 添加computed响应式
+   * 添加get拦截
    */
   function defineComputed (target, key, userDef) {
     var shouldCache = !isServerRendering();
     if (typeof userDef === 'function') {
       // computed为一个函数    
       sharedPropertyDefinition.get = shouldCache
-        // // 浏览器环境
+        // 浏览器环境
         ? createComputedGetter(key)
         : createGetterInvoker(userDef);
       sharedPropertyDefinition.set = noop;
     } else {
-      // computed为一个对象，含有set和get属性
+      // computed为一个对象，含有get属性
       sharedPropertyDefinition.get = userDef.get
         ? shouldCache && userDef.cache !== false
           ? createComputedGetter(key)
-          // 如果computed属性不是一个函数，则执行这个函数
+          // 浏览器渲染，且userDef.cache为false
           : createGetterInvoker(userDef.get)
         : noop;
       sharedPropertyDefinition.set = userDef.set || noop;
@@ -5061,7 +5067,7 @@
 
   /**
    * 创建computed的getter函数
-   * 每次读取computed属性时，触发视图更新
+   * 具有缓存的computed
    */
   function createComputedGetter (key) {
     return function computedGetter () {
@@ -5080,7 +5086,8 @@
   }
 
   /**
-   * 创建getter调用函数
+   * 创建get的调用函数
+   * 无缓存的getter
    */
   function createGetterInvoker(fn) {
     return function computedGetter () {
@@ -5156,7 +5163,7 @@
   }
 
   /**
-   * 初始化数据
+   * 状态混合
    */
   function stateMixin (Vue) {
     var dataDef = {};
@@ -5191,6 +5198,7 @@
       }
       options = options || {};
       options.user = true;
+      // 通过创建观察者来实现观察
       var watcher = new Watcher(vm, expOrFn, cb, options);
       if (options.immediate) {
         try {
@@ -5214,7 +5222,7 @@
    * 初始化混合
    */
   function initMixin (Vue) {
-    //初始化函数
+    // 初始化函数
     Vue.prototype._init = function (options) {
       var vm = this;
       // a uid
@@ -5539,6 +5547,7 @@
           // 则不进入此条件判断
           if (type === 'component' && isPlainObject(definition)) {
             definition.name = definition.name || id;
+            // Vue.extend
             definition = this.options._base.extend(definition);
           }
           if (type === 'directive' && typeof definition === 'function') {
@@ -6227,8 +6236,8 @@
           isDef(a.data) === isDef(b.data) /* data都已经定义（不等于undefined或者null） */ &&
           sameInputType(a, b) /* input类型相等 */
         ) || (
-          isTrue(a.isAsyncPlaceholder) &&
-          a.asyncFactory === b.asyncFactory &&
+          isTrue(a.isAsyncPlaceholder) && // 是异步占位符节点
+          a.asyncFactory === b.asyncFactory && // 异步工厂方法
           isUndef(b.asyncFactory.error)
         )
       )
@@ -7253,17 +7262,15 @@
     // 如果vnode为组件，且组件的options.inheritAttrs为false，终止函数
     /*
       e.g:
+      <container id="app"></container>
+
       Vue.component("container", {
-        data: () => {
-          return {
-            count: 10,
-          }
-        },
         inheritAttrs: false,
-        template: `<div>
-          <slot v-bind:count="count"></slot>
-          </div>`
-      })
+        template: `<div></div>`
+      });
+      前提：子组件的props中未注册父组件传递过来的属性
+      inheritAttrs为true时，页面将渲染：<div id="app"></div>;
+      inheritAttrs为false时，页面将渲染：<div></div>;
     */
     if (isDef(opts) && opts.Ctor.options.inheritAttrs /* 继承属性 */ === false) {
       return
@@ -11571,7 +11578,7 @@
     return res
   }
 
-  // e.g: <div v-mode="counter" v-for="counter in list">
+  // e.g: <div v-model="counter" v-for="counter in list">
   function checkForAliasModel (el, value) {
     var _el = el;
     while (_el) {
@@ -12301,7 +12308,7 @@
 
   /**
    * gen => generator生成器
-   * 生成v-if
+   * 生成v-if、v-else、v-else-if
    */
   function genIfConditions (conditions, state, altGen, altEmpty) {
     if (!conditions.length) {
@@ -12310,7 +12317,7 @@
 
     var condition = conditions.shift();
     if (condition.exp) {
-      // e.g: v-if
+      // e.g: v-if、v-else-if
       return ("(" + (condition.exp) + ")?" + (genTernaryExp(condition.block)) + ":" + (genIfConditions(conditions, state, altGen, altEmpty)))
     } else {
       // e.g: v-else
